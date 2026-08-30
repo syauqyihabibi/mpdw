@@ -1811,17 +1811,17 @@ metode.terbaik</code></pre>
 <p>Jika dilihat dari akurasi maka SMA menghasilkan akurasi terbaik. tapi
 ini tidak berarti SMA mampu ataupun berhasil menangkap pola dari data
 yang ada. nyatanya seluruh metode pemulusan gagal menangkap pola yang
-ada. metode SMA atau DMA cocok untuk data yang memiliki pola konstan dan
-hanya naik turun karena noise. ketika dilakukan prediksi dengan SMA
-ataupun DMA maka prediksi akan menghasilkan garis lurus, harapannya data
-akan naik turun di sekitar garis prediksi. metode SES dan DES cocok
+ada. metode SMA atau SES cocok untuk data yang memiliki pola stasioner
+dan hanya naik turun karena noise. ketika dilakukan prediksi dengan SMA
+ataupun SES maka prediksi akan menghasilkan garis lurus, harapannya data
+akan naik turun di sekitar garis prediksi. metode DMA dan DES cocok
 untuk data yang memiliki pola konstan dan terdapat tren (naik atau
-turun). ketika dilakukan prediksi dengan SES ataupun DES maka prediksi
+turun). ketika dilakukan prediksi dengan DMA ataupun DES maka prediksi
 akan menghasilkan garis lurus (naik atau turun) sesuai trend pada data
 latih. pada kasus data ini data latih memiliki trend naik namun pada
 data uji trend nya cenderung sedikit turun. metode holt-winters cocok
 untuk data yang memiliki pola seasonal. pada hasil eksplorasi data
-ditemukan pola data tidaklah konstan, naik, ataupun turun, data
+ditemukan pola data tidaklah stasioner, naik, ataupun turun, data
 cenderung naik-turun. ketika dilihat pola tahunan nya pun tidak terlihat
 pola yang cukup signifikan untuk disebut seragam antar tahun. jadi
 prediksi holt-winters tidaklah cukup akurat karena memang tidak ada pola

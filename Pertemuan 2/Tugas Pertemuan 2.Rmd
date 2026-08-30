@@ -1,1 +1,235 @@
+---
+title: "Tugas Pertemuan 2"
+author: "Syauqyi"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: lumen
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+## Packages
+
+```{r, message=FALSE, warning=FALSE}
+library(rio)
+library(TTR)
+library(forecast)
+```
+
+## 1. Import dan Eksplorasi Data
+
+```{r}
+data <- import("D:/SMT5/MPDW/data mpdw.xlsx", sheet = "orang 1")
+str(data)
+start.year  <- as.numeric(substr(data$timestamp[1], 1, 4))
+start.month <- as.numeric(substr(data$timestamp[1], 6, 7))
+
+data.ts <- ts(data$global_temperature_anomaly_C,
+              start = c(start.year, start.month), frequency = 12)
+```
+
+```{r}
+ts.plot(data.ts, xlab = "Tahun", ylab = "Anomali Suhu (°C)",
+        main = "Plot Data Anomali Suhu Global - Orang 1")
+points(data.ts)
+```
+
+```{r}
+seasonplot(data.ts, year.labels = TRUE, year.labels.left = TRUE,
+           col = rainbow(ceiling(length(data.ts) / 12)),
+           xlab = "Bulan", ylab = "Anomali Suhu (°C)",
+           main = "Seasonal Plot - Anomali Suhu per Bulan, Tiap Tahun")
+```
+
+
+## 2. Pembagian Data (80% Latih, 20% Uji)
+
+```{r}
+n <- length(data.ts)
+n_train <- floor(0.8 * n)
+
+train.ts <- window(data.ts, end   = time(data.ts)[n_train])
+test.ts  <- window(data.ts, start = time(data.ts)[n_train + 1])
+```
+
+## 3. Fungsi Akurasi
+
+
+```{r}
+akurasi <- function(actual, pred) {
+  actual <- as.numeric(actual)
+  pred   <- as.numeric(pred)
+  e <- actual - pred
+
+  c(
+    SSE   = sum(e^2),
+    MSE   = mean(e^2),
+    RMSE  = sqrt(mean(e^2)),
+    MAE   = mean(abs(e)),
+    MAPE  = mean(abs(e / actual)) * 100,
+    sMAPE = mean(abs(e) / ((abs(actual) + abs(pred)) / 2)) * 100
+  )
+}
+```
+
+## 4. Single Moving Average (SMA)
+
+```{r}
+m <- 4
+
+sma        <- SMA(train.ts, n = m)
+sma.fitted <- c(NA, sma[-length(sma)])
+sma.test   <- rep(tail(sma, 1), length(test.ts))
+
+idx <- (m + 1):n_train
+akurasi.sma.train <- akurasi(train.ts[idx], sma.fitted[idx])
+akurasi.sma.test  <- akurasi(test.ts, sma.test)
+```
+
+## 5. Double Moving Average (DMA)
+
+```{r}
+s1 <- SMA(train.ts, n = m)
+s2 <- SMA(s1, n = m)
+a  <- 2 * s1 - s2
+b  <- (2 / (m - 1)) * (s1 - s2)
+
+dma.value  <- a + b
+dma.fitted <- c(NA, dma.value[-length(dma.value)])
+
+a_last   <- as.numeric(tail(a, 1))
+b_last   <- as.numeric(tail(b, 1))
+h        <- 1:length(test.ts)
+dma.test <- a_last + b_last * h
+
+idx <- (2 * m):n_train
+akurasi.dma.train <- akurasi(train.ts[idx], dma.fitted[idx])
+akurasi.dma.test  <- akurasi(test.ts, dma.test)
+```
+
+## 6. Single Exponential Smoothing (SES)
+
+```{r}
+ses.model  <- HoltWinters(train.ts, beta = FALSE, gamma = FALSE)
+ses.model$alpha
+
+ses.fitted <- ses.model$fitted[, 1]
+ses.test   <- forecast(ses.model, h = length(test.ts))$mean
+
+akurasi.ses.train <- akurasi(train.ts[-1], ses.fitted)
+akurasi.ses.test  <- akurasi(test.ts, ses.test)
+```
+
+## 7. Double Exponential Smoothing (DES)
+
+```{r}
+des.model  <- HoltWinters(train.ts, gamma = FALSE)
+des.model$alpha
+des.model$beta
+
+des.fitted <- des.model$fitted[, 1]
+des.test   <- forecast(des.model, h = length(test.ts))$mean
+
+akurasi.des.train <- akurasi(train.ts[-c(1, 2)], des.fitted)
+akurasi.des.test  <- akurasi(test.ts, des.test)
+```
+
+## 8. Holt-Winters
+
+```{r}
+hw.model  <- HoltWinters(train.ts, seasonal = "additive")
+hw.model$alpha
+hw.model$beta
+hw.model$gamma
+
+hw.fitted <- hw.model$fitted[, 1]
+hw.test   <- forecast(hw.model, h = length(test.ts))$mean
+
+akurasi.hw.train <- akurasi(train.ts[-(1:12)], hw.fitted)
+akurasi.hw.test  <- akurasi(test.ts, hw.test)
+```
+
+## 9. Perbandingan Kinerja Metode
+
+```{r}
+tabel.train <- rbind(SMA = akurasi.sma.train, DMA = akurasi.dma.train,
+                      SES = akurasi.ses.train, DES = akurasi.des.train,
+                      HW  = akurasi.hw.train)
+tabel.test  <- rbind(SMA = akurasi.sma.test,  DMA = akurasi.dma.test,
+                      SES = akurasi.ses.test,  DES = akurasi.des.test,
+                      HW  = akurasi.hw.test)
+
+tabel.train
+tabel.test
+```
+
+```{r}
+sma.fitted <- as.numeric(sma.fitted)
+dma.fitted <- as.numeric(dma.fitted)
+ses.fitted.plot <- c(NA, as.numeric(ses.fitted))
+des.fitted.plot <- c(NA, NA, as.numeric(des.fitted))
+hw.fitted.plot  <- c(rep(NA, 12), as.numeric(hw.fitted))
+start.train <- start(train.ts)
+freq.train  <- frequency(train.ts)
+
+sma.fitted.ts <- ts(sma.fitted,      start = start.train, frequency = freq.train)
+dma.fitted.ts <- ts(dma.fitted,      start = start.train, frequency = freq.train)
+ses.fitted.ts <- ts(ses.fitted.plot, start = start.train, frequency = freq.train)
+des.fitted.ts <- ts(des.fitted.plot, start = start.train, frequency = freq.train)
+hw.fitted.ts  <- ts(hw.fitted.plot,  start = start.train, frequency = freq.train)
+
+plot(train.ts, type = "o",
+     ylim = range(c(train.ts, sma.fitted, dma.fitted, ses.fitted.plot,
+                     des.fitted.plot, hw.fitted.plot), na.rm = TRUE),
+     xlab = "Tahun", ylab = "Anomali Suhu (°C)",
+     main = "Perbandingan Hasil Pemulusan pada Data Latih")
+lines(sma.fitted.ts, col = "red",    type = "o")
+lines(dma.fitted.ts, col = "blue",   type = "o")
+lines(ses.fitted.ts, col = "green",  type = "o")
+lines(des.fitted.ts, col = "orange", type = "o")
+lines(hw.fitted.ts,  col = "purple", type = "o")
+legend("topleft", c("Aktual", "SMA", "DMA", "SES", "DES", "Holt-Winters"),
+       col = c("black", "red", "blue", "green", "orange", "purple"), lty = 1, cex = 0.7)
+```
+
+```{r}
+sma.test <- as.numeric(sma.test)
+dma.test <- as.numeric(dma.test)
+ses.test <- as.numeric(ses.test)
+des.test <- as.numeric(des.test)
+hw.test  <- as.numeric(hw.test)
+start.test <- start(test.ts)
+freq.test  <- frequency(test.ts)
+
+sma.test.ts <- ts(sma.test, start = start.test, frequency = freq.test)
+dma.test.ts <- ts(dma.test, start = start.test, frequency = freq.test)
+ses.test.ts <- ts(ses.test, start = start.test, frequency = freq.test)
+des.test.ts <- ts(des.test, start = start.test, frequency = freq.test)
+hw.test.ts  <- ts(hw.test,  start = start.test, frequency = freq.test)
+
+plot(test.ts, type = "o",
+     ylim = range(c(test.ts, sma.test, dma.test, ses.test, des.test, hw.test)),
+     xlab = "Tahun", ylab = "Anomali Suhu (°C)",
+     main = "Perbandingan Hasil Ramalan pada Data Uji")
+lines(sma.test.ts, col = "red",    type = "o")
+lines(dma.test.ts, col = "blue",   type = "o")
+lines(ses.test.ts, col = "green",  type = "o")
+lines(des.test.ts, col = "orange", type = "o")
+lines(hw.test.ts,  col = "purple", type = "o")
+legend("topleft", c("Aktual", "SMA", "DMA", "SES", "DES", "Holt-Winters"),
+       col = c("black", "red", "blue", "green", "orange", "purple"), lty = 1, cex = 0.7)
+```
+
+```{r}
+metode.terbaik <- rownames(tabel.test)[which.min(tabel.test[, "MAPE"])]
+metode.terbaik
+```
+
+## 10. Kesimpulan
+
+Jika dilihat dari akurasi maka SMA menghasilkan akurasi terbaik. tapi ini tidak berarti SMA mampu ataupun berhasil menangkap pola dari data yang ada. nyatanya seluruh metode pemulusan gagal menangkap pola yang ada. metode SMA atau DMA cocok untuk data yang memiliki pola konstan dan hanya naik turun karena noise. ketika dilakukan prediksi dengan SMA ataupun DMA maka prediksi akan menghasilkan garis lurus, harapannya data akan naik turun di sekitar garis prediksi. metode SES dan DES cocok untuk data yang memiliki pola konstan dan terdapat tren (naik atau turun). ketika dilakukan prediksi dengan SES ataupun DES maka prediksi akan menghasilkan garis lurus (naik atau turun) sesuai trend pada data latih. pada kasus data ini data latih memiliki trend naik namun pada data uji trend nya cenderung sedikit turun. metode holt-winters cocok untuk data yang memiliki pola seasonal. pada hasil eksplorasi data ditemukan pola data tidaklah konstan, naik, ataupun turun, data cenderung naik-turun. ketika dilihat pola tahunan nya pun tidak terlihat pola yang cukup signifikan untuk disebut seragam antar tahun. jadi prediksi holt-winters tidaklah cukup akurat karena memang tidak ada pola tahunan, ini juga diperparah karena holt-winters juga menangkap trend maka prediksi nya akan cenderung naik namun data uji mengalami perubahan trend yaitu malah cenderung turun. SMA memiliki kesalahan paling kecil karena perubahan trend data uji. prediksi SMA tetap jauh dari benar namun karena prediksi-prediksi lain memiliki trend naik maka kesalahan metode lain akan semakin tinggi.
+
+
 

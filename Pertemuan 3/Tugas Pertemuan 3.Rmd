@@ -302,7 +302,7 @@ ragam sisaan model.
 **Uji Normalitas (Shapiro-Wilk Test):**
 
 Hasil pengujian menunjukkan nilai statistik $W = 0,96198$ dengan
-$p\text{-value} = 0,08983$. Karena $p\text{-value} > 0,05$, keputusan
+$p\text{-value} = 0,08983$.Karena $p\text{-value} > 0,05$, keputusan
 yang diambil adalah gagal tolak $H_0$, yang berarti sisaan menyebar
 normal.
 

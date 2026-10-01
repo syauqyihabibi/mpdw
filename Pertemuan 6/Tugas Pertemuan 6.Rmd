@@ -1,0 +1,427 @@
+---
+title: "Tugas Pertemuan 6"
+author: "M.Syauqyi Habibi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+## Package
+
+```{r}
+library(readxl)
+library(forecast)
+library(tseries)
+library(TSA)
+library(lmtest)
+library(MASS)
+library(ggplot2)
+```
+
+## Data
+
+Data yang digunakan adalah sheet full data, berisi anomali suhu global bulanan.
+
+```{r}
+data <- read_excel("dataMPDW.xlsx")
+colnames(data) <- c("timestamp", "anomali")
+data$anomali <- as.numeric(data$anomali)
+head(data)
+str(data)
+```
+
+```{r}
+cat("Jumlah data:", nrow(data), "\n")
+cat("Data kosong:", sum(is.na(data$anomali)), "\n")
+summary(data$anomali)
+```
+
+Data diubah menjadi objek time series bulanan.
+
+```{r}
+awal <- as.numeric(strsplit(data$timestamp[1], "-")[[1]])
+y <- ts(data$anomali, start = awal, frequency = 12)
+autoplot(y) +
+  labs(title = "Anomali Suhu Global Bulanan", x = "Waktu", y = "Anomali (C)") +
+  theme_minimal()
+```
+
+Interpretasi: plot terlihat naik dari waktu ke waktu, sehingga ada indikasi tren dan data belum stasioner dalam rataan.
+
+## Pembagian Data Train dan Test
+
+Data dibagi 80% untuk train dan 20% untuk test.
+
+```{r}
+n <- length(y)
+n_train <- floor(0.8 * n)
+train <- ts(y[1:n_train], start = start(y), frequency = 12)
+test <- ts(y[(n_train + 1):n], start = time(y)[n_train + 1], frequency = 12)
+cat("Data train:", length(train), "\n")
+cat("Data test:", length(test), "\n")
+```
+
+```{r}
+autoplot(train, series = "Train") +
+  autolayer(test, series = "Test") +
+  labs(title = "Pembagian Data Train dan Test", x = "Waktu", y = "Anomali (C)", colour = "") +
+  theme_minimal()
+```
+
+## Kestasioneran Data Train
+
+### Plot Data Train
+
+```{r}
+autoplot(train) +
+  labs(title = "Data Train", x = "Waktu", y = "Anomali (C)") +
+  theme_minimal()
+```
+
+### Uji Stasioner dalam Rataan
+
+```{r}
+ggAcf(train, lag.max = 48) + labs(title = "ACF Data Train") + theme_minimal()
+```
+
+Interpretasi: jika ACF turun sangat lambat (tails off slowly), data tidak stasioner dalam rataan.
+
+```{r}
+adf_train <- adf.test(train)
+adf_train
+```
+
+Interpretasi: p-value = `r round(adf_train$p.value, 4)`. `r ifelse(adf_train$p.value < 0.05, "P-value kurang dari 0.05, maka data stasioner dalam rataan.", "P-value lebih dari 0.05, maka data belum stasioner dalam rataan dan perlu differencing.")`
+
+### Uji Stasioner dalam Ragam
+
+Box-Cox hanya bisa untuk data positif. Data anomali memiliki nilai negatif, maka data digeser dengan konstanta agar semua nilainya positif. Pergeseran ini tidak mengubah pola ragam.
+
+```{r}
+geser <- ifelse(min(train) <= 0, abs(min(train)) + 1, 0)
+train_s <- train + geser
+cat("Konstanta geser:", geser, "\n")
+```
+
+```{r}
+bc <- boxcox(lm(as.numeric(train_s) ~ 1), lambda = seq(-3, 3, 0.01), plotit = TRUE)
+```
+
+```{r}
+lambda_opt <- bc$x[which.max(bc$y)]
+batas <- max(bc$y) - qchisq(0.95, 1) / 2
+ci <- range(bc$x[bc$y >= batas])
+hasil_bc <- data.frame(Lambda_optimum = lambda_opt, Batas_bawah = ci[1], Batas_atas = ci[2])
+hasil_bc
+```
+
+```{r}
+ragam_stasioner <- ci[1] <= 1 & ci[2] >= 1
+lam <- if (ragam_stasioner) NULL else lambda_opt
+```
+
+Interpretasi: selang kepercayaan 95% untuk lambda adalah `r round(ci[1], 2)` sampai `r round(ci[2], 2)`. `r ifelse(ragam_stasioner, "Selang mengandung angka 1, maka data stasioner dalam ragam dan tidak perlu transformasi.", "Selang tidak mengandung angka 1, maka data belum stasioner dalam ragam dan perlu transformasi Box-Cox.")`
+
+```{r}
+train_t <- if (is.null(lam)) train_s else BoxCox(train_s, lam)
+autoplot(train_t) +
+  labs(title = "Data Train Setelah Pengecekan Ragam", x = "Waktu", y = "Nilai") +
+  theme_minimal()
+```
+
+## Differencing
+
+Differencing dilakukan sampai data stasioner dalam rataan. Orde differencing dicek dengan uji ADF.
+
+```{r}
+d <- 0
+seri <- train_t
+while (adf.test(seri)$p.value >= 0.05 & d < 3) {
+  d <- d + 1
+  seri <- diff(seri)
+}
+cat("Orde differencing (d):", d, "\n")
+adf_diff <- adf.test(seri)
+adf_diff
+```
+
+Interpretasi: `r ifelse(d == 0, "Data sudah stasioner, tidak perlu differencing.", paste0("Setelah differencing orde ", d, ", p-value ADF = ", round(adf_diff$p.value, 4), ". Data sudah stasioner dalam rataan."))`
+
+```{r}
+autoplot(seri) +
+  labs(title = "Data Train Setelah Differencing", x = "Waktu", y = "Nilai") +
+  theme_minimal()
+```
+
+## Identifikasi Model
+
+### ACF dan PACF
+
+```{r}
+par(mfrow = c(1, 2))
+acf(seri, lag.max = 36, main = "ACF")
+pacf(seri, lag.max = 36, main = "PACF")
+par(mfrow = c(1, 1))
+```
+
+Interpretasi: lag ACF yang keluar batas menunjukkan kandidat orde q. Lag PACF yang keluar batas menunjukkan kandidat orde p.
+
+### EACF
+
+```{r}
+TSA::eacf(seri, ar.max = 6, ma.max = 6)
+```
+
+Interpretasi: kandidat model diambil dari pojok kiri atas segitiga simbol o pada tabel EACF.
+
+### Kandidat Model
+
+Kandidat model disusun dari hasil ACF, PACF, dan EACF. Kandidat dibuat dengan orde p dan q kecil.
+
+```{r}
+kandidat <- data.frame(
+  p = c(0, 1, 0, 1, 2, 2, 0, 1),
+  q = c(1, 0, 2, 1, 0, 1, 3, 2)
+)
+kandidat$d <- d
+kandidat$model <- paste0("ARIMA(", kandidat$p, ",", kandidat$d, ",", kandidat$q, ")")
+kandidat
+```
+
+## Pendugaan Parameter dan Pemilihan Model
+
+Setiap kandidat diduga parameternya. Model dipilih jika semua parameter signifikan (p-value kurang dari 0.05) dan nilai AIC kecil.
+
+```{r}
+fit_model <- function(p, d, q) {
+  tryCatch(Arima(train_s, order = c(p, d, q), lambda = lam, method = "ML"),
+           error = function(e) NULL)
+}
+
+semua_model <- list()
+tabel <- data.frame()
+
+for (i in seq_len(nrow(kandidat))) {
+  m <- fit_model(kandidat$p[i], kandidat$d[i], kandidat$q[i])
+  if (is.null(m)) next
+  uji <- coeftest(m)
+  semua_model[[kandidat$model[i]]] <- m
+  tabel <- rbind(tabel, data.frame(
+    Model = kandidat$model[i],
+    AIC = AIC(m),
+    BIC = BIC(m),
+    Semua_signifikan = all(uji[, 4] < 0.05)
+  ))
+}
+tabel <- tabel[order(tabel$AIC), ]
+tabel
+```
+
+### Uji Signifikansi Parameter
+
+```{r}
+for (nm in tabel$Model) {
+  cat("\n", nm, "\n")
+  print(coeftest(semua_model[[nm]]))
+}
+```
+
+### Model Terbaik
+
+```{r}
+layak <- tabel[tabel$Semua_signifikan, ]
+if (nrow(layak) == 0) layak <- tabel
+nama_terbaik <- layak$Model[which.min(layak$AIC)]
+model_terbaik <- semua_model[[nama_terbaik]]
+cat("Model terbaik:", nama_terbaik, "\n")
+summary(model_terbaik)
+```
+
+Interpretasi: model terbaik adalah **`r nama_terbaik`**, yaitu model dengan semua parameter signifikan dan AIC terkecil.
+
+## Analisis Sisaan
+
+```{r}
+sisaan <- as.numeric(residuals(model_terbaik))
+```
+
+### Plot Sisaan
+
+```{r}
+par(mfrow = c(2, 2))
+qqnorm(sisaan); qqline(sisaan, col = "red")
+plot(sisaan, type = "p", main = "Sisaan vs Urutan", ylab = "Sisaan"); abline(h = 0, col = "red")
+acf(sisaan, main = "ACF Sisaan")
+pacf(sisaan, main = "PACF Sisaan")
+par(mfrow = c(1, 1))
+```
+
+Interpretasi: titik QQ-plot yang mengikuti garis menandakan sisaan menyebar normal. Sisaan yang acak di sekitar nol dan tidak ada lag ACF yang keluar batas menandakan model baik.
+
+### Uji Normalitas
+
+```{r}
+sw <- shapiro.test(sisaan)
+ks <- ks.test(sisaan, "pnorm", mean(sisaan), sd(sisaan))
+sw
+ks
+```
+
+Interpretasi: p-value Shapiro-Wilk = `r round(sw$p.value, 4)`. `r ifelse(sw$p.value > 0.05, "Sisaan menyebar normal.", "Sisaan tidak menyebar normal.")` P-value Kolmogorov-Smirnov = `r round(ks$p.value, 4)`. `r ifelse(ks$p.value > 0.05, "Sisaan menyebar normal.", "Sisaan tidak menyebar normal.")`
+
+### Uji Autokorelasi
+
+```{r}
+lb <- Box.test(sisaan, lag = 20, type = "Ljung-Box", fitdf = length(coef(model_terbaik)))
+lb
+```
+
+Interpretasi: p-value = `r round(lb$p.value, 4)`. `r ifelse(lb$p.value > 0.05, "Tidak ada autokorelasi pada sisaan.", "Masih ada autokorelasi pada sisaan.")`
+
+### Uji Kehomogenan Ragam
+
+Uji dilakukan dengan Ljung-Box pada kuadrat sisaan.
+
+```{r}
+lb2 <- Box.test(sisaan^2, lag = 20, type = "Ljung-Box")
+lb2
+```
+
+Interpretasi: p-value = `r round(lb2$p.value, 4)`. `r ifelse(lb2$p.value > 0.05, "Ragam sisaan homogen.", "Ragam sisaan tidak homogen.")`
+
+### Uji Nilai Tengah Sisaan
+
+```{r}
+tt <- t.test(sisaan, mu = 0)
+tt
+```
+
+Interpretasi: p-value = `r round(tt$p.value, 4)`. `r ifelse(tt$p.value > 0.05, "Nilai tengah sisaan sama dengan nol.", "Nilai tengah sisaan tidak sama dengan nol.")`
+
+## Overfitting
+
+Model terbaik dibandingkan dengan model yang orde p atau q-nya ditambah satu.
+
+```{r}
+ord <- arimaorder(model_terbaik)
+p0 <- ord[1]; d0 <- ord[2]; q0 <- ord[3]
+
+over <- list(
+  c(p0 + 1, d0, q0),
+  c(p0, d0, q0 + 1)
+)
+
+tabel_over <- data.frame(Model = nama_terbaik, AIC = AIC(model_terbaik),
+                         Semua_signifikan = all(coeftest(model_terbaik)[, 4] < 0.05))
+for (o in over) {
+  m <- fit_model(o[1], o[2], o[3])
+  if (is.null(m)) next
+  tabel_over <- rbind(tabel_over, data.frame(
+    Model = paste0("ARIMA(", o[1], ",", o[2], ",", o[3], ")"),
+    AIC = AIC(m),
+    Semua_signifikan = all(coeftest(m)[, 4] < 0.05)
+  ))
+  semua_model[[tail(tabel_over$Model, 1)]] <- m
+}
+tabel_over
+```
+
+```{r}
+for (nm in tabel_over$Model[-1]) {
+  cat("\n", nm, "\n")
+  print(coeftest(semua_model[[nm]]))
+}
+```
+
+Interpretasi: model overfitting dianggap lebih baik jika semua parameternya signifikan dan AIC lebih kecil. Jika tidak, model terbaik awal tetap dipakai.
+
+```{r}
+lebih_baik <- tabel_over[-1, ]
+lebih_baik <- lebih_baik[lebih_baik$Semua_signifikan & lebih_baik$AIC < tabel_over$AIC[1], ]
+if (nrow(lebih_baik) > 0) {
+  model_final_nama <- lebih_baik$Model[which.min(lebih_baik$AIC)]
+} else {
+  model_final_nama <- nama_terbaik
+}
+model_final <- semua_model[[model_final_nama]]
+cat("Model final:", model_final_nama, "\n")
+```
+
+Interpretasi: model final yang digunakan untuk peramalan adalah **`r model_final_nama`**.
+
+## Peramalan
+
+### Peramalan pada Data Test
+
+```{r}
+h <- length(test)
+fc <- forecast(model_final, h = h)
+fc_mean <- as.numeric(fc$mean) - geser
+fc_lo <- as.numeric(fc$lower[, 2]) - geser
+fc_hi <- as.numeric(fc$upper[, 2]) - geser
+hasil_fc <- data.frame(Waktu = as.numeric(time(test)), Aktual = as.numeric(test),
+                       Ramalan = fc_mean, Bawah95 = fc_lo, Atas95 = fc_hi)
+head(hasil_fc, 12)
+```
+
+```{r}
+fc_ts <- ts(fc_mean, start = start(test), frequency = 12)
+autoplot(train, series = "Train") +
+  autolayer(test, series = "Test") +
+  autolayer(fc_ts, series = "Ramalan") +
+  labs(title = "Hasil Peramalan terhadap Data Test", x = "Waktu", y = "Anomali (C)", colour = "") +
+  theme_minimal()
+```
+
+### Akurasi Peramalan
+
+```{r}
+aktual <- as.numeric(test)
+galat <- aktual - fc_mean
+akurasi <- data.frame(
+  RMSE = sqrt(mean(galat^2)),
+  MAE = mean(abs(galat)),
+  MAPE = mean(abs(galat / aktual)) * 100
+)
+akurasi
+```
+
+Interpretasi: semakin kecil nilai RMSE dan MAE, semakin dekat ramalan dengan data aktual. MAPE kurang cocok untuk data ini jika ada nilai aktual mendekati nol.
+
+### Peramalan ke Depan
+
+Model dilatih ulang dengan seluruh data, lalu digunakan untuk meramalkan 24 bulan ke depan.
+
+```{r}
+ord_f <- arimaorder(model_final)
+y_s <- y + geser
+model_full <- Arima(y_s, order = ord_f[1:3], lambda = lam, method = "ML")
+fc_depan <- forecast(model_full, h = 24)
+fc_depan$mean <- fc_depan$mean - geser
+fc_depan$lower <- fc_depan$lower - geser
+fc_depan$upper <- fc_depan$upper - geser
+fc_depan$x <- fc_depan$x - geser
+
+autoplot(fc_depan) +
+  labs(title = "Peramalan 24 Bulan ke Depan", x = "Waktu", y = "Anomali (C)") +
+  theme_minimal()
+```
+
+```{r}
+data.frame(Waktu = format(as.Date(paste0(floor(time(fc_depan$mean)), "-",
+                                         round((time(fc_depan$mean) %% 1) * 12) + 1, "-01")), "%Y-%m"),
+           Ramalan = round(as.numeric(fc_depan$mean), 3),
+           Bawah95 = round(as.numeric(fc_depan$lower[, 2]), 3),
+           Atas95 = round(as.numeric(fc_depan$upper[, 2]), 3))
+```
+
+## Kesimpulan
+
+Model ARIMA terbaik untuk data anomali suhu global adalah **`r model_final_nama`**. Model ini dipilih dari parameter yang signifikan, AIC terkecil, dan hasil analisis sisaan. Hasil peramalan menunjukkan pola yang mengikuti kecenderungan data, dengan akurasi pada data test berupa RMSE sebesar `r round(akurasi$RMSE, 4)` dan MAE sebesar `r round(akurasi$MAE, 4)`.
